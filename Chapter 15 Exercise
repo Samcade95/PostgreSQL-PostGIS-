@@ -1,0 +1,197 @@
+CREATE TABLE farmers_markets (
+    fmid bigint PRIMARY KEY,
+    market_name text NOT NULL,
+    street text,
+    city text,
+    county text,
+    st text NOT NULL,
+    zip text,
+    longitude numeric(10,7),
+    latitude numeric(10,7),
+    organic text NOT NULL
+);
+
+**Here we create the new table within PostgreSQL called farmers_markets and set its Primary Key (fmid) with a PRIMARY KEY constraint, we also set two other values (market_name, organic) to have a NOT NULL constraint**
+
+COPY farmers_markets
+FROM 'C:\YourDirectory\farmers_markets.csv'
+WITH (FORMAT CSV, HEADER);
+
+**Here we import the large quantitative dataset from the USDA into the newley created table, and format the dataset with the FORMAT command to a CSV that includes a header**
+
+SELECT count(*) FROM farmers_markets;
+
+**Here we use the SELECT statement with the count() function and the * metacharacter to display all the current rows within the table, it should return 8,681 rows**
+
+ALTER TABLE farmers_markets ADD COLUMN geog_point geography(POINT,4326);
+
+**Here we add a new column to the table using the ALTER TABLE command and the ADD COLUMN option**
+**The new name of the column is geog_point which will hold points and reference the WGS 84 coordinate system**
+
+UPDATE farmers_markets
+SET geog_point = 
+     ST_SetSRID(
+               ST_MakePoint(longitude,latitude)::geography,4326
+               );
+
+**Here we use the UPDATE statement to fill the geog_point column**
+**We also use the SET statement to set the column to use the two functions ST_SetSRID() and ST_MakePoint()**
+**These two functions take as input the longitude and latitude columns from the table**
+
+CREATE INDEX market_pts_idx ON farmers_markets USING GIST (geog_point);
+
+**Here we use the CREATE INDEX statement to create an R-tree index, which is a spatial index**
+**Next we use the USING GIST statement to incorporate the generalized search tree (GiST) to incorporate specialized indexes to the database**
+**This allows "indexing of complex datatypes" according to Bruce Momjian, a core team member of PostgreSQL**
+
+SELECT longitude,
+       latitude,
+       geog_point,
+       ST_AsEWKT(geog_point)
+FROM farmers_markets
+WHERE longitude IS NOT NULL
+LIMIT 5;
+
+**Here we use the SELECT statement to view the geography data to show the newley added column**
+**To view the extended WKT version of geog_point, we use the ST_AsEWKT() function** 
+**We use a WHERE clause and a NOT NULL clause for the longitude column, and use the LIMIT statement to limit the results length to 5**
+
+SELECT market_name,
+       city,
+       st,
+       geog_point
+FROM farmers_markets
+WHERE ST_DWithin(geog_point,
+                 ST_GeogFromText('POINT(-93.6204386 41.5853202)'),
+                 10000)
+ORDER BY market_name;
+
+**Here we use the SELECT statement and the FROM statement to select the market_name, city, st, and geog_point columns from the farmers_markets table**
+**We then use a WHERE clause and the ST_DWithin() function to locate Farmer's Markets within 10 km of a point**
+**Finally we use an ORDER BY statement to order the results by the market_name column**
+
+SELECT market_name,
+       city,
+       round(
+           (ST_Distance(geog_point,
+                        ST_GeogFromText('POINT(-93.6204386 41.5853202)')
+                        ) / 1609.344)::numeric, 2
+            ) AS miles_from_dt
+FROM farmers_markets
+WHERE ST_DWithin(geog_point,
+                 ST_GeogFromText('POINT(-93.6204386 41.5853202)'),
+                 10000)
+ORDER BY miles_from_dt ASC;
+
+**Here we use the same code as before when we found markets 10 kilometers or closer to downtown**
+**We use the ST_Distance() function as a column to calculate and display the distance from downtown**
+**Here we also use the round() function to trim the output, and we convert meters to miles by dividing 1609.344 which is the approximate number of meters in a mile**
+**Finally we use the ORDER BY statement to order miles_from_dt in ascending order**
+
+SELECT market_name,
+       city,
+       st,
+       round(
+           (ST_Distance(geog_point,
+                        ST_GeogFromText('POINT(-68.2041607 44.3876414)')
+                        ) / 1609.344)::numeric, 2
+            ) AS miles_from_bh
+FROM farmers_markets
+ORDER BY geog_point <-> ST_GeogFromText('POINT(-68.2041607 44.3876414)')
+LIMIT 3;
+
+**Here we use the distance operator (<->) with an ORDER BY clause to order the results by the distance from the geography to the Point**
+**We use the LIMIT statement to limit the results length to the three closest markets(the three nearest neighbors)**
+
+SELECT ST_AsText(geom)
+FROM us_counties_2019_shp
+ORDER BY gid
+LIMIT 1;
+
+**Here we check the geom column's well-known text (WKT) representation**
+**We limit the results displayed by 1**
+
+SELECT name,
+       statefp AS st,
+       round(
+             ( ST_Area(geom::geography) / 2589988.110336 )::numeric, 2
+            )  AS square_miles
+FROM us_counties_2019_shp
+ORDER BY square_miles DESC
+LIMIT 5;
+
+**Here we cast the geom column to a geography data type within the ST_Area() function, and then divide the area by 2589988.110336 to get square miles**
+**These numbers we divided in the previous line of code are the number of square meters in a square mile**
+**We make the result easier to read by using a round() function, and naming the column square_miles**
+**We finally list the results in descending order from the largest area to the smallest area**
+**We use the LIMIT statement to display the results length to only the first 5 results**
+
+SELECT sh.name,
+       c.state_name
+FROM us_counties_2019_shp sh JOIN us_counties_pop_est_2019 c
+    ON sh.statefp = c.state_fips AND sh.countyfp = c.county_fips
+WHERE ST_Within(
+         'SRID=4269;POINT(-118.3419063 34.0977076)'::geometry, geom
+);
+
+**Here we use the ST_Within() function inside a WHERE clause to evaluate the two geometry inputs and whether the first input is inside the second**
+**For the correct operation of the function both inputs must have the same SRID**
+**The ST_Within() function doesn't accept a seperate SRID input, so you have to prefix it to the string**
+
+SELECT sum(c.pop_est_2019) AS pop_est_2019
+FROM us_counties_2019_shp sh JOIN us_counties_pop_est_2019 c
+    ON sh.statefp = c.state_fips AND sh.countyfp = c.county_fips
+WHERE ST_DWithin(sh.geom::geography, 
+          ST_GeogFromText('SRID=4269;POINT(-96.699656 40.811567)'),
+          80467);
+
+**Here we use the ST_Within() function to count people near Lincoln, Nebraska**
+
+SELECT sh.name,
+       c.state_name,
+       c.pop_est_2019,
+       ST_Transform(sh.geom, 4326) AS geom
+FROM us_counties_2019_shp sh JOIN us_counties_pop_est_2019 c
+    ON sh.statefp = c.state_fips AND sh.countyfp = c.county_fips
+WHERE ST_DWithin(sh.geom::geography, 
+          ST_GeogFromText('SRID=4269;POINT(-96.699656 40.811567)'),
+          80467);
+
+**Here we use the ST_Transform() function to convert the cenus geometry to the SRID of 4326**
+
+SELECT ST_GeometryType(geom)
+FROM santafe_linearwater_2019
+LIMIT 1;
+
+SELECT ST_GeometryType(geom)
+FROM santafe_roads_2019
+LIMIT 1;
+
+**Here we use the ST_GeometryType() function to determine the spatial feature type we are querying**
+
+SELECT water.fullname AS waterway,
+       roads.rttyp,
+       roads.fullname AS road
+FROM santafe_linearwater_2019 water JOIN santafe_roads_2019 roads
+    ON ST_Intersects(water.geom, roads.geom)
+WHERE water.fullname = 'Santa Fe Riv' 
+      AND roads.fullname IS NOT NULL
+ORDER BY roads.fullname;
+
+**Here we use a spatial join with the ST_Intersects() function to find roads crossing the Santa Fe river**
+
+SELECT water.fullname AS waterway,
+       roads.rttyp,
+       roads.fullname AS road,
+       ST_AsText(ST_Intersection(water.geom, roads.geom))
+FROM santafe_linearwater_2019 water JOIN santafe_roads_2019 roads
+    ON ST_Intersects(water.geom, roads.geom)
+WHERE water.fullname = 'Santa Fe Riv'
+      AND roads.fullname IS NOT NULL
+ORDER BY roads.fullname;
+
+**Here we use the ST_Intersection() function to show where the roads cross the river**
+
+**This was a fun project all together, feel free to give it a try and test out your PostgreSQL skills :)**
+**Sources used Chapter 15 Exercise from the book "Practical SQL: A Beginner's Guide To Storytelling With Data", Author: Anthony DeBarros**
+
